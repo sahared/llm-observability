@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sahared/llm-observability/internal/models"
-	"github.com/sahared/llm-observability/internal/repository"
+	"github.com/Aditya-Pimpalkar/clarity/internal/models"
+	"github.com/Aditya-Pimpalkar/clarity/internal/repository"
 )
 
 // Mock repository for testing
@@ -258,7 +258,7 @@ func TestCalculateCost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cost := service.calculateCost(tt.model, tt.provider, tt.promptTokens, tt.completionTokens)
+			cost := service.calculateCost(tt.model, tt.provider, int(tt.promptTokens), int(tt.completionTokens))
 
 			// Allow small floating point differences
 			if cost < tt.wantCost*0.99 || cost > tt.wantCost*1.01 {

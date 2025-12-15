@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/sahared/llm-observability/internal/middleware"
-	"github.com/sahared/llm-observability/internal/models"
-	"github.com/sahared/llm-observability/internal/services"
+	"github.com/Aditya-Pimpalkar/clarity/internal/middleware"
+	"github.com/Aditya-Pimpalkar/clarity/internal/models"
+	"github.com/Aditya-Pimpalkar/clarity/internal/services"
 )
 
 // AuthHandler handles authentication requests

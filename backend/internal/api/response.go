@@ -2,7 +2,7 @@ package api
 
 import (
 	"github.com/gofiber/fiber/v2"
-	"github.com/sahared/llm-observability/internal/models"
+	"github.com/Aditya-Pimpalkar/clarity/internal/models"
 )
 
 // Response helpers for consistent API responses

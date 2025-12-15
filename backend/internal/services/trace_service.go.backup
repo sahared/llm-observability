@@ -1,0 +1,365 @@
+package services
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/Aditya-Pimpalkar/clarity/internal/models"
+	"github.com/Aditya-Pimpalkar/clarity/internal/repository"
+    "github.com/Aditya-Pimpalkar/clarity/internal/kafka"
+)
+
+// TraceService handles business logic for traces
+type TraceService struct {
+    producer *kafka.Producer
+	repo repository.Repository
+}
+
+// NewTraceService creates a new trace service
+func NewTraceService(repo repository.Repository, producer *kafka.Producer) *TraceService {
+	return &TraceService{
+		repo: repo,
+	}
+}
+
+// CreateTrace creates a new trace with validation and enrichment
+func (s *TraceService) CreateTrace(ctx context.Context, req *models.TraceRequest) (*models.TraceResponse, error) {
+	// Step 1: Validate the request
+	if err := s.validateTraceRequest(req); err != nil {
+		return nil, fmt.Errorf("validation failed: %w", err)
+	}
+
+	// Step 2: Generate trace ID if not provided
+	traceID := uuid.New().String()
+
+	// Step 3: Calculate total cost and tokens from spans
+	var totalCost float64
+	var totalTokens int
+	var totalDuration int64
+
+	// Convert request spans to model spans
+	spans := make([]models.Span, len(req.Spans))
+	for i, spanReq := range req.Spans {
+		spanID := uuid.New().String()
+		
+		// Calculate cost for this span
+		cost := s.calculateCost(spanReq.Model, spanReq.Provider, spanReq.PromptTokens, spanReq.CompletionTokens)
+		totalCost += cost
+		totalTokens += int(spanReq.PromptTokens + spanReq.CompletionTokens)
+		totalDuration += spanReq.DurationMs
+
+		// Create span
+		spans[i] = models.Span{
+			SpanID:           spanID,
+			TraceID:          traceID,
+			ParentSpanID:     spanReq.ParentSpanID,
+			Name:             spanReq.Name,
+			StartTime:        time.Now(), // You might get this from request in real implementation
+			EndTime:          time.Now().Add(time.Duration(spanReq.DurationMs) * time.Millisecond),
+			DurationMs:       spanReq.DurationMs,
+			Model:            spanReq.Model,
+			Provider:         spanReq.Provider,
+			Input:            s.truncateString(spanReq.Input, 1000),
+			Output:           s.truncateString(spanReq.Output, 1000),
+			PromptTokens:     spanReq.PromptTokens,
+			CompletionTokens: spanReq.CompletionTokens,
+			TotalTokens:      spanReq.PromptTokens + spanReq.CompletionTokens,
+			CostUSD:          cost,
+			Status:           spanReq.Status,
+			ErrorMessage:     spanReq.ErrorMessage,
+			Metadata:         spanReq.Metadata,
+		}
+	}
+
+	// Step 4: Create the trace model
+	trace := &models.Trace{
+		TraceID:        traceID,
+		OrganizationID: req.OrganizationID,
+		ProjectID:      req.ProjectID,
+		Timestamp:      time.Now(),
+		TraceType:      req.TraceType,
+		DurationMs:     int64(totalDuration),
+		Status:         s.determineTraceStatus(spans),
+		TotalCostUSD:   totalCost,
+		TotalTokens:    int(totalTokens),
+		Model:          req.Model,
+		Provider:       req.Provider,
+		UserID:         req.UserID,
+		Metadata:       req.Metadata,
+		Spans:          spans,
+	}
+
+	// Step 5: Save to repository
+	if err := s.repo.SaveTrace(ctx, trace); err != nil {
+		return nil, fmt.Errorf("failed to save trace: %w", err)
+	}
+
+	// Step 6: Asynchronously save metrics (non-blocking)
+	go s.recordMetrics(context.Background(), trace)
+
+	// Step 7: Return response
+	return &models.TraceResponse{
+		TraceID:   traceID,
+		Status:    "accepted",
+		Message:   "Trace created successfully",
+		CreatedAt: trace.Timestamp.Format(time.RFC3339),
+	}, nil
+}
+
+// validateTraceRequest validates the trace request
+func (s *TraceService) validateTraceRequest(req *models.TraceRequest) error {
+	if req.OrganizationID == "" {
+		return fmt.Errorf("organization_id is required")
+	}
+
+	if req.ProjectID == "" {
+		return fmt.Errorf("project_id is required")
+	}
+
+	if req.Model == "" {
+		return fmt.Errorf("model is required")
+	}
+
+	if req.Provider == "" {
+		return fmt.Errorf("provider is required")
+	}
+
+	if len(req.Spans) == 0 {
+		return fmt.Errorf("at least one span is required")
+	}
+
+	// Validate trace type
+	validTraceTypes := map[string]bool{
+		"single_call":    true,
+		"agent_workflow": true,
+		"chain":          true,
+	}
+	if !validTraceTypes[req.TraceType] {
+		return fmt.Errorf("invalid trace_type: %s", req.TraceType)
+	}
+
+	return nil
+}
+
+// calculateCost calculates the cost of an LLM call based on provider pricing
+func (s *TraceService) calculateCost(model, provider string, promptTokens, completionTokens int) float64 {
+	// Pricing table (per 1000 tokens)
+	// These are example prices - update with real pricing
+	pricing := map[string]map[string]struct {
+		prompt     float64
+		completion float64
+	}{
+		"openai": {
+			"gpt-4": {
+				prompt:     0.03,
+				completion: 0.06,
+			},
+			"gpt-4-turbo": {
+				prompt:     0.01,
+				completion: 0.03,
+			},
+			"gpt-3.5-turbo": {
+				prompt:     0.0005,
+				completion: 0.0015,
+			},
+		},
+		"anthropic": {
+			"claude-3-opus": {
+				prompt:     0.015,
+				completion: 0.075,
+			},
+			"claude-3-sonnet": {
+				prompt:     0.003,
+				completion: 0.015,
+			},
+			"claude-3-haiku": {
+				prompt:     0.00025,
+				completion: 0.00125,
+			},
+		},
+		"cohere": {
+			"command": {
+				prompt:     0.001,
+				completion: 0.002,
+			},
+		},
+	}
+
+	// Get pricing for this provider and model
+	providerPricing, ok := pricing[provider]
+	if !ok {
+		// Unknown provider, use default
+		return (float64(promptTokens) * 0.00001) + (float64(completionTokens) * 0.00003)
+	}
+
+	modelPricing, ok := providerPricing[model]
+	if !ok {
+		// Unknown model, use default for provider
+		return (float64(promptTokens) * 0.00001) + (float64(completionTokens) * 0.00003)
+	}
+
+	// Calculate cost (pricing is per 1000 tokens)
+	promptCost := (float64(promptTokens) / 1000.0) * modelPricing.prompt
+	completionCost := (float64(completionTokens) / 1000.0) * modelPricing.completion
+
+	return promptCost + completionCost
+}
+
+// determineTraceStatus determines the overall trace status based on span statuses
+func (s *TraceService) determineTraceStatus(spans []models.Span) string {
+	if len(spans) == 0 {
+		return "unknown"
+	}
+
+	hasError := false
+	hasTimeout := false
+
+	for _, span := range spans {
+		switch span.Status {
+		case "error":
+			hasError = true
+		case "timeout":
+			hasTimeout = true
+		}
+	}
+
+	if hasError {
+		return "error"
+	}
+	if hasTimeout {
+		return "timeout"
+	}
+
+	return "success"
+}
+
+// truncateString truncates a string to maxLen characters
+func (s *TraceService) truncateString(str string, maxLen int) string {
+	if len(str) <= maxLen {
+		return str
+	}
+	return str[:maxLen] + "..."
+}
+
+// recordMetrics records metrics for this trace (async)
+func (s *TraceService) recordMetrics(ctx context.Context, trace *models.Trace) {
+	// Record various metrics
+	metrics := []models.Metric{
+		{
+			Timestamp:      trace.Timestamp,
+			OrganizationID: trace.OrganizationID,
+			ProjectID:      trace.ProjectID,
+			MetricName:     "request_count",
+			MetricValue:    1,
+			Tags: map[string]interface{}{
+				"model":    trace.Model,
+				"provider": trace.Provider,
+				"status":   trace.Status,
+			},
+		},
+		{
+			Timestamp:      trace.Timestamp,
+			OrganizationID: trace.OrganizationID,
+			ProjectID:      trace.ProjectID,
+			MetricName:     "latency_ms",
+			MetricValue:    float64(trace.DurationMs),
+			Tags: map[string]interface{}{
+				"model":    trace.Model,
+				"provider": trace.Provider,
+			},
+		},
+		{
+			Timestamp:      trace.Timestamp,
+			OrganizationID: trace.OrganizationID,
+			ProjectID:      trace.ProjectID,
+			MetricName:     "cost_usd",
+			MetricValue:    trace.TotalCostUSD,
+			Tags: map[string]interface{}{
+				"model":    trace.Model,
+				"provider": trace.Provider,
+			},
+		},
+		{
+			Timestamp:      trace.Timestamp,
+			OrganizationID: trace.OrganizationID,
+			ProjectID:      trace.ProjectID,
+			MetricName:     "token_count",
+			MetricValue:    float64(trace.TotalTokens),
+			Tags: map[string]interface{}{
+				"model":    trace.Model,
+				"provider": trace.Provider,
+			},
+		},
+	}
+
+	// Save metrics (ignore errors in async operation)
+	for _, metric := range metrics {
+		_ = s.repo.SaveMetric(ctx, &metric)
+	}
+}
+
+// GetTrace retrieves a trace by ID
+func (s *TraceService) GetTrace(ctx context.Context, traceID string) (*models.Trace, error) {
+	if traceID == "" {
+		return nil, fmt.Errorf("trace_id is required")
+	}
+
+	trace, err := s.repo.GetTraceByID(ctx, traceID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get trace: %w", err)
+	}
+
+	return trace, nil
+}
+
+// GetTraces retrieves traces with filtering and pagination
+func (s *TraceService) GetTraces(ctx context.Context, query *models.TraceQuery) ([]*models.Trace, int64, error) {
+	// Validate query
+	if query.OrganizationID == "" {
+		return nil, 0, fmt.Errorf("organization_id is required")
+	}
+
+	if query.ProjectID == "" {
+		return nil, 0, fmt.Errorf("project_id is required")
+	}
+
+	// Set default limit
+	if query.Limit == 0 {
+		query.Limit = 50
+	}
+
+	// Cap at maximum
+	if query.Limit > 1000 {
+		query.Limit = 1000
+	}
+
+	// Get traces
+	traces, err := s.repo.GetTraces(ctx, query)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get traces: %w", err)
+	}
+
+	// Get total count for pagination
+	count, err := s.repo.GetTraceCount(ctx, query)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get trace count: %w", err)
+	}
+
+	return traces, count, nil
+}
+
+// GetTracesByDateRange is a convenience method for getting traces by date
+func (s *TraceService) GetTracesByDateRange(ctx context.Context, orgID, projectID string, startTime, endTime time.Time, limit, offset int) ([]*models.Trace, int64, error) {
+	query := &models.TraceQuery{
+		OrganizationID: orgID,
+		ProjectID:      projectID,
+		StartTime:      startTime,
+		EndTime:        endTime,
+		Limit:          limit,
+		Offset:         offset,
+	}
+
+	return s.GetTraces(ctx, query)
+}

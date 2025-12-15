@@ -1,22 +1,14 @@
-# Build stage - Use latest Go
+# Build stage - Use latest Go with auto toolchain
 FROM golang:alpine AS builder
 
 WORKDIR /app
 
-# Install build dependencies
-RUN apk add --no-cache git
-
-# Copy go mod files
-COPY go.mod go.sum ./
-
-# Download dependencies with toolchain auto-install
-RUN go mod download
-
-# Copy source code
+# Copy everything
 COPY . .
 
-# Build binary
+# Build - let Go download the right toolchain automatically
 RUN CGO_ENABLED=0 GOOS=linux go build \
+    -mod=vendor \
     -ldflags="-s -w" \
     -o /app/bin/api \
     ./cmd/api
@@ -24,12 +16,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # Production stage
 FROM alpine:latest
 
-# Install ca-certificates
 RUN apk --no-cache add ca-certificates
 
 WORKDIR /app
 
-# Copy binary
 COPY --from=builder /app/bin/api .
 
 EXPOSE 8080

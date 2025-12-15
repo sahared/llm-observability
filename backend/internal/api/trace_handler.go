@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/sahared/llm-observability/internal/models"
-	"github.com/sahared/llm-observability/internal/services"
+	"github.com/Aditya-Pimpalkar/clarity/internal/models"
+	"github.com/Aditya-Pimpalkar/clarity/internal/services"
 )
 
 // TraceHandler handles trace-related HTTP requests
@@ -105,8 +105,8 @@ func (h *TraceHandler) ListTraces(c *fiber.Ctx) error {
 	query := &models.TraceQuery{
 		OrganizationID: c.Query("organization_id"),
 		ProjectID:      c.Query("project_id"),
-		StartTime:      c.Query("start_time"),
-		EndTime:        c.Query("end_time"),
+		StartTime:      parseTime(c.Query("start_time")),
+		EndTime:        parseTime(c.Query("end_time")),
 		Model:          c.Query("model"),
 		Status:         c.Query("status"),
 	}
@@ -135,12 +135,12 @@ func (h *TraceHandler) ListTraces(c *fiber.Ctx) error {
 	}
 
 	// Set default time range if not provided
-	if query.StartTime == "" {
-		query.StartTime = time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
+	if query.StartTime.IsZero() {
+		query.StartTime = time.Now().Add(-24 * time.Hour)
 	}
 
-	if query.EndTime == "" {
-		query.EndTime = time.Now().Format(time.RFC3339)
+	if query.EndTime.IsZero() {
+		query.EndTime = time.Now()
 	}
 
 	// Call service
@@ -154,4 +154,33 @@ func (h *TraceHandler) ListTraces(c *fiber.Ctx) error {
 
 	// Return paginated response
 	return PaginatedResponse(c, traces, total, page, limit)
+}
+
+// parseTime parses time string in various formats
+func parseTime(timeStr string) time.Time {
+	if timeStr == "" {
+		return time.Time{}
+	}
+	
+	// Try RFC3339 first
+	t, err := time.Parse(time.RFC3339, timeStr)
+	if err == nil {
+		return t
+	}
+	
+	// Try other formats
+	formats := []string{
+		"2006-01-02T15:04:05Z",
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+	}
+	
+	for _, format := range formats {
+		t, err := time.Parse(format, timeStr)
+		if err == nil {
+			return t
+		}
+	}
+	
+	return time.Time{}
 }

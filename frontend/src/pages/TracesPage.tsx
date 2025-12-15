@@ -46,8 +46,8 @@ export default function TracesPage() {
     setLoading(true)
     try {
       const params: any = {
-        organization_id: 'org-test-123',
-        project_id: 'proj-test-123',
+        organization_id: 'org-test',
+        project_id: 'proj-test',
         limit: 50,
         offset: 0,
       }

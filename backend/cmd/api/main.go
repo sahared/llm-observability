@@ -14,10 +14,11 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/joho/godotenv"
 
-	"github.com/sahared/llm-observability/internal/api"
-	"github.com/sahared/llm-observability/internal/middleware"
-	"github.com/sahared/llm-observability/internal/repository"
-	"github.com/sahared/llm-observability/internal/services"
+	"github.com/Aditya-Pimpalkar/clarity/internal/api"
+	"github.com/Aditya-Pimpalkar/clarity/internal/middleware"
+	"github.com/Aditya-Pimpalkar/clarity/internal/repository"
+	"github.com/Aditya-Pimpalkar/clarity/internal/kafka"
+	"github.com/Aditya-Pimpalkar/clarity/internal/services"
 )
 
 func main() {
@@ -34,7 +35,7 @@ func main() {
 
 	// Connect to ClickHouse
 	log.Println("🔌 Connecting to ClickHouse...")
-	repo, err := repository.NewClickHouseRepository(config.ClickHouseDSN)
+	repo, err := repository.NewClickHouseRepository("localhost:9000")
 	if err != nil {
 		log.Fatal("❌ Failed to connect to ClickHouse:", err)
 	}
@@ -48,6 +49,22 @@ func main() {
 		log.Fatal("❌ ClickHouse ping failed:", err)
 	}
 	log.Println("✅ Database health check passed")
+
+	// Initialize Kafka producer (optional - continues if unavailable)
+	log.Println("🔌 Connecting to Kafka...")
+	kafkaConfig := &kafka.ProducerConfig{
+		Brokers: []string{getEnv("KAFKA_BROKERS", "localhost:9092")},
+		Topic:   getEnv("KAFKA_TOPIC", "llm-traces"),
+	}
+	
+	kafkaProducer, err := kafka.NewProducer(kafkaConfig)
+	if err != nil {
+		log.Printf("⚠️  Kafka unavailable (continuing without events): %v", err)
+		kafkaProducer = nil // Continue without Kafka
+	} else {
+		defer kafkaProducer.Close()
+		log.Println("✅ Kafka producer connected")
+	}
 
 	// Create Fiber app
 	app := fiber.New(fiber.Config{
@@ -67,7 +84,7 @@ func main() {
 
 	// Setup routes
 	log.Println("🛣️  Setting up routes...")
-	setupRoutes(app, repo, config)
+	setupRoutes(app, repo, kafkaProducer, config)
 	log.Println("✅ Routes configured")
 
 	// Start server in goroutine
@@ -152,9 +169,9 @@ func setupMiddleware(app *fiber.App, config Config) {
 }
 
 // setupRoutes configures all routes with appropriate middleware
-func setupRoutes(app *fiber.App, repo repository.Repository, config Config) {
+func setupRoutes(app *fiber.App, repo repository.Repository, kafkaProducer *kafka.Producer, config Config) {
 	// Create services
-	traceService := services.NewTraceService(repo)
+	traceService := services.NewTraceService(repo, kafkaProducer)
 	analyticsService := services.NewAnalyticsService(repo)
 	userService := services.NewUserService(repo)
 
@@ -335,3 +352,5 @@ func getEnvInt(key string, defaultValue int) int {
 	}
 	return defaultValue
 }
+// CI test
+// CI test

@@ -1,7 +1,7 @@
 import axios, { AxiosInstance } from 'axios'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080'
-const API_KEY = 'test-key-123' // Use test API key for demo
+const API_KEY = 'demo-key-456' // Use test API key for demo
 
 class ApiClient {
   private client: AxiosInstance

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sahared/llm-observability/internal/models"
-	"github.com/sahared/llm-observability/internal/repository"
+	"github.com/Aditya-Pimpalkar/clarity/internal/models"
+	"github.com/Aditya-Pimpalkar/clarity/internal/repository"
 )
 
 // AnalyticsService handles business logic for analytics and metrics

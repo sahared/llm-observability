@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/sahared/llm-observability/internal/models"
+	"github.com/Aditya-Pimpalkar/clarity/internal/models"
 )
 
 // getTestDSN returns the ClickHouse connection string for testing
@@ -58,7 +58,7 @@ func TestSaveAndGetTrace(t *testing.T) {
 		Model:          "gpt-4",
 		Provider:       "openai",
 		UserID:         "test-user",
-		Metadata:       map[string]interface{}{"temperature": 0.7},
+		Metadata:       map[string]string{"temperature": "0.7"},
 		Spans: []models.Span{
 			{
 				SpanID:           uuid.New().String(),
@@ -76,7 +76,7 @@ func TestSaveAndGetTrace(t *testing.T) {
 				TotalTokens:      15,
 				CostUSD:          0.0024,
 				Status:           "success",
-				Metadata:         map[string]interface{}{},
+				Metadata:         map[string]string{},
 			},
 		},
 	}
@@ -129,14 +129,14 @@ func TestGetTraces(t *testing.T) {
 			ProjectID:      projectID,
 			Timestamp:      time.Now(),
 			TraceType:      "single_call",
-			DurationMs:     uint32(100 + i*50),
+			DurationMs:     int64(100 + i*50),
 			Status:         "success",
 			TotalCostUSD:   0.001 * float64(i+1),
-			TotalTokens:    uint32(100 * (i + 1)),
+			TotalTokens:    int(100 * (i + 1)),
 			Model:          "gpt-4",
 			Provider:       "openai",
 			UserID:         "test-user",
-			Metadata:       map[string]interface{}{},
+			Metadata:       map[string]string{},
 			Spans:          []models.Span{},
 		}
 
@@ -188,14 +188,14 @@ func TestGetMetricSummary(t *testing.T) {
 			ProjectID:      projectID,
 			Timestamp:      time.Now().Add(time.Duration(-i*10) * time.Minute),
 			TraceType:      "single_call",
-			DurationMs:     uint32(100 + i*20),
+			DurationMs:     int64(100 + i*20),
 			Status:         "success",
 			TotalCostUSD:   0.001 * float64(i+1),
-			TotalTokens:    uint32(100 * (i + 1)),
+			TotalTokens:    int(100 * (i + 1)),
 			Model:          "gpt-4",
 			Provider:       "openai",
 			UserID:         "test-user",
-			Metadata:       map[string]interface{}{},
+			Metadata:       map[string]string{},
 			Spans:          []models.Span{},
 		}
 

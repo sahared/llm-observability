@@ -1,0 +1,157 @@
+package api
+
+import (
+	"strconv"
+	"time"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/sahared/llm-observability/internal/models"
+	"github.com/sahared/llm-observability/internal/services"
+)
+
+// TraceHandler handles trace-related HTTP requests
+type TraceHandler struct {
+	traceService *services.TraceService
+}
+
+// NewTraceHandler creates a new trace handler
+func NewTraceHandler(traceService *services.TraceService) *TraceHandler {
+	return &TraceHandler{
+		traceService: traceService,
+	}
+}
+
+// CreateTrace handles POST /api/v1/traces
+func (h *TraceHandler) CreateTrace(c *fiber.Ctx) error {
+	// Parse request body
+	var req models.TraceRequest
+	if err := BindJSON(c, &req); err != nil {
+		return BadRequestResponse(c, "Invalid request body: "+err.Error())
+	}
+
+	// Call service
+	resp, err := h.traceService.CreateTrace(c.Context(), &req)
+	if err != nil {
+		return InternalErrorResponse(c, "Failed to create trace: "+err.Error())
+	}
+
+	// Return response
+	return CreatedResponse(c, resp)
+}
+
+// CreateTraceBatch handles POST /api/v1/traces/batch
+func (h *TraceHandler) CreateTraceBatch(c *fiber.Ctx) error {
+	// Parse request body
+	var req models.BatchTraceRequest
+	if err := BindJSON(c, &req); err != nil {
+		return BadRequestResponse(c, "Invalid request body: "+err.Error())
+	}
+
+	// Validate batch size
+	if len(req.Traces) == 0 {
+		return BadRequestResponse(c, "Batch must contain at least one trace")
+	}
+
+	if len(req.Traces) > 1000 {
+		return BadRequestResponse(c, "Batch size cannot exceed 1000 traces")
+	}
+
+	// Process each trace
+	accepted := 0
+	rejected := 0
+	var errors []string
+
+	for i, traceReq := range req.Traces {
+		_, err := h.traceService.CreateTrace(c.Context(), &traceReq)
+		if err != nil {
+			rejected++
+			errors = append(errors, "Trace "+strconv.Itoa(i)+": "+err.Error())
+		} else {
+			accepted++
+		}
+	}
+
+	// Return batch response
+	response := models.BatchTraceResponse{
+		Accepted: accepted,
+		Rejected: rejected,
+		Errors:   errors,
+	}
+
+	return CreatedResponse(c, response)
+}
+
+// GetTrace handles GET /api/v1/traces/:id
+func (h *TraceHandler) GetTrace(c *fiber.Ctx) error {
+	// Get trace ID from URL parameter
+	traceID := c.Params("id")
+	if traceID == "" {
+		return BadRequestResponse(c, "Trace ID is required")
+	}
+
+	// Call service
+	trace, err := h.traceService.GetTrace(c.Context(), traceID)
+	if err != nil {
+		return NotFoundResponse(c, "Trace not found")
+	}
+
+	// Return trace
+	return SuccessResponse(c, trace)
+}
+
+// ListTraces handles GET /api/v1/traces
+func (h *TraceHandler) ListTraces(c *fiber.Ctx) error {
+	// Parse query parameters
+	query := &models.TraceQuery{
+		OrganizationID: c.Query("organization_id"),
+		ProjectID:      c.Query("project_id"),
+		StartTime:      parseTime(c.Query("start_time")),
+		EndTime:        parseTime(c.Query("end_time")),
+		Model:          c.Query("model"),
+		Status:         c.Query("status"),
+	}
+
+	// Parse pagination parameters
+	limit, err := strconv.Atoi(c.Query("limit", "50"))
+	if err != nil || limit < 1 {
+		limit = 50
+	}
+
+	offset, err := strconv.Atoi(c.Query("offset", "0"))
+	if err != nil || offset < 0 {
+		offset = 0
+	}
+
+	query.Limit = limit
+	query.Offset = offset
+
+	// Validate required parameters
+	if query.OrganizationID == "" {
+		return BadRequestResponse(c, "organization_id is required")
+	}
+
+	if query.ProjectID == "" {
+		return BadRequestResponse(c, "project_id is required")
+	}
+
+	// Set default time range if not provided
+	if query.StartTime.IsZero() {
+		query.StartTime = time.Now().Add(-24 * time.Hour)
+	}
+
+	if query.EndTime.IsZero() {
+		query.EndTime = time.Now().Format(time.RFC3339)
+	}
+
+	// Call service
+	traces, total, err := h.traceService.GetTraces(c.Context(), query)
+	if err != nil {
+		return InternalErrorResponse(c, "Failed to get traces: "+err.Error())
+	}
+
+	// Calculate page number
+	page := (offset / limit) + 1
+
+	// Return paginated response
+	return PaginatedResponse(c, traces, total, page, limit)
+}

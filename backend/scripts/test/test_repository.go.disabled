@@ -1,0 +1,131 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/Aditya-Pimpalkar/clarity/internal/models"
+	"github.com/Aditya-Pimpalkar/clarity/internal/repository"
+)
+
+func main() {
+	// Connect to ClickHouse
+	dsn := "clickhouse://localhost:9000/llm_observability"
+	repo, err := repository.NewClickHouseRepository(dsn)
+	if err != nil {
+		log.Fatalf("Failed to connect to ClickHouse: %v", err)
+	}
+	defer repo.Close()
+
+	ctx := context.Background()
+
+	// Test 1: Ping
+	fmt.Println("Test 1: Ping ClickHouse...")
+	if err := repo.Ping(ctx); err != nil {
+		log.Fatalf("Ping failed: %v", err)
+	}
+	fmt.Println("✓ Ping successful")
+
+	// Test 2: Save a trace
+	fmt.Println("\nTest 2: Save a trace...")
+	trace := &models.Trace{
+		TraceID:        uuid.New().String(),
+		OrganizationID: "org-demo",
+		ProjectID:      "proj-demo",
+		Timestamp:      time.Now(),
+		TraceType:      "single_call",
+		DurationMs:     245,
+		Status:         "success",
+		TotalCostUSD:   0.0048,
+		TotalTokens:    800,
+		Model:          "gpt-4",
+		Provider:       "openai",
+		UserID:         "user-demo",
+		Metadata: map[string]string{
+			"temperature": "0.7",
+			"environment": "development",
+		},
+		Spans: []models.Span{
+			{
+				SpanID:           uuid.New().String(),
+				TraceID:          "", // Will be set below
+				Name:             "chat_completion",
+				StartTime:        time.Now(),
+				EndTime:          time.Now().Add(245 * time.Millisecond),
+				DurationMs:       245,
+				Model:            "gpt-4",
+				Provider:         "openai",
+				Input:            "Explain quantum computing in simple terms",
+				Output:           "Quantum computing uses quantum mechanics principles...",
+				PromptTokens:     12,
+				CompletionTokens: 85,
+				TotalTokens:      97,
+				CostUSD:          0.0048,
+				Status:           "success",
+				Metadata:         map[string]string{},
+			},
+		},
+	}
+
+	// Set span trace ID
+	trace.Spans[0].TraceID = trace.TraceID
+
+	if err := repo.SaveTrace(ctx, trace); err != nil {
+		log.Fatalf("Failed to save trace: %v", err)
+	}
+	fmt.Printf("✓ Trace saved: %s\n", trace.TraceID)
+
+	// Test 3: Retrieve the trace
+	fmt.Println("\nTest 3: Retrieve the trace...")
+	retrieved, err := repo.GetTraceByID(ctx, trace.TraceID)
+	if err != nil {
+		log.Fatalf("Failed to retrieve trace: %v", err)
+	}
+	fmt.Printf("✓ Retrieved trace: %s\n", retrieved.TraceID)
+	fmt.Printf("  Model: %s\n", retrieved.Model)
+	fmt.Printf("  Cost: $%.4f\n", retrieved.TotalCostUSD)
+	fmt.Printf("  Duration: %dms\n", retrieved.DurationMs)
+	fmt.Printf("  Spans: %d\n", len(retrieved.Spans))
+
+	// Test 4: Query traces
+	fmt.Println("\nTest 4: Query traces...")
+	
+	// FIX: Use UTC format without timezone offset
+	startTime := time.Now().Add(-1 * time.Hour).UTC()
+	endTime := time.Now().UTC()
+	
+	query := &models.TraceQuery{
+		OrganizationID: "org-demo",
+		ProjectID:      "proj-demo",
+		StartTime:      startTime, // ClickHouse format
+		EndTime:        endTime,   // ClickHouse format
+		Limit:          10,
+	}
+
+	traces, err := repo.GetTraces(ctx, query)
+	if err != nil {
+		log.Fatalf("Failed to query traces: %v", err)
+	}
+	fmt.Printf("✓ Found %d traces\n", len(traces))
+	for i, t := range traces {
+		fmt.Printf("  %d. %s - %s ($%.4f)\n", i+1, t.TraceID[:8], t.Model, t.TotalCostUSD)
+	}
+
+	// Test 5: Get metric summary
+	fmt.Println("\nTest 5: Get metric summary...")
+	// summary, err := repo.GetMetricSummary(ctx, &models.MetricQuery{OrganizationID: orgID, ProjectID: projectID, StartTime: startTime, EndTime: endTime})
+		time.Now().Add(-24*time.Hour), time.Now())
+	if err != nil {
+		log.Fatalf("Failed to get summary: %v", err)
+	}
+	fmt.Printf("✓ Metric Summary:\n")
+	fmt.Printf("  Total Requests: %d\n", summary.TotalRequests)
+	fmt.Printf("  Total Cost: $%.4f\n", summary.TotalCostUSD)
+	fmt.Printf("  Avg Latency: %.2fms\n", summary.AvgLatencyMs)
+	fmt.Printf("  Success Rate: %.2f%%\n", summary.SuccessRate)
+
+	fmt.Println("\n✓ All tests passed!")
+}

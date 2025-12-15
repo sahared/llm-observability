@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/sahared/llm-observability/internal/models"
-	"github.com/sahared/llm-observability/internal/repository"
+	"github.com/Aditya-Pimpalkar/clarity/internal/models"
+	"github.com/Aditya-Pimpalkar/clarity/internal/repository"
 )
 
 // UserService handles business logic for users and authentication
